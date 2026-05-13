@@ -14,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	md "github.com/JohannesKaufmann/html-to-markdown"
 )
 
 const userAgent = "readeck_toolkit/0.1"
@@ -140,3 +142,139 @@ func (c *Client) ListBookmarks(ctx context.Context, opts ListOpts) ([]Bookmark, 
 func PermalinkOf(baseURL, id string) string {
 	return strings.TrimRight(baseURL, "/") + "/bookmarks/" + id
 }
+
+// UpdateInput is the body for PATCH /api/bookmarks/{id}. Pointer bools let
+// callers distinguish "leave alone" (nil) from "set to false" (&false).
+// Labels, when non-nil, REPLACES the bookmark's labels — to add or remove,
+// use Client.AddLabels / Client.RemoveLabels which do the get-and-merge.
+type UpdateInput struct {
+	IsArchived *bool    `json:"is_archived,omitempty"`
+	IsMarked   *bool    `json:"is_marked,omitempty"`
+	Labels     []string `json:"labels,omitempty"`
+}
+
+// GetBookmark fetches one bookmark by id.
+func (c *Client) GetBookmark(ctx context.Context, id string) (*Bookmark, error) {
+	var bm Bookmark
+	if err := c.do(ctx, "GET", "/api/bookmarks/"+url.PathEscape(id), nil, &bm); err != nil {
+		return nil, err
+	}
+	return &bm, nil
+}
+
+// UpdateBookmark sends a PATCH for the given fields.
+func (c *Client) UpdateBookmark(ctx context.Context, id string, in UpdateInput) error {
+	return c.do(ctx, "PATCH", "/api/bookmarks/"+url.PathEscape(id), in, nil)
+}
+
+// DeleteBookmark removes a bookmark.
+func (c *Client) DeleteBookmark(ctx context.Context, id string) error {
+	return c.do(ctx, "DELETE", "/api/bookmarks/"+url.PathEscape(id), nil, nil)
+}
+
+// AddLabels appends labels to a bookmark, deduplicated.
+func (c *Client) AddLabels(ctx context.Context, id string, add []string) error {
+	bm, err := c.GetBookmark(ctx, id)
+	if err != nil {
+		return err
+	}
+	merged := mergeLabels(bm.Labels, add)
+	return c.UpdateBookmark(ctx, id, UpdateInput{Labels: merged})
+}
+
+// RemoveLabels strips the named labels from a bookmark.
+func (c *Client) RemoveLabels(ctx context.Context, id string, remove []string) error {
+	bm, err := c.GetBookmark(ctx, id)
+	if err != nil {
+		return err
+	}
+	kept := filterLabels(bm.Labels, remove)
+	return c.UpdateBookmark(ctx, id, UpdateInput{Labels: kept})
+}
+
+// Label is one row from GET /api/bookmarks/labels.
+type Label struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// ListLabels returns all labels with their bookmark counts.
+func (c *Client) ListLabels(ctx context.Context) ([]Label, error) {
+	var out []Label
+	if err := c.do(ctx, "GET", "/api/bookmarks/labels", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetArticleHTML returns the extracted HTML body of an article. Readeck
+// serves no .md endpoint — see GetArticleMarkdown for a converted form.
+func (c *Client) GetArticleHTML(ctx context.Context, id string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/bookmarks/"+url.PathEscape(id)+"/article", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("readeck GET article %s: %d %s", id, resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// GetArticleMarkdown fetches the article and converts to Markdown so LLM
+// callers pay fewer tokens than they would on raw HTML.
+func (c *Client) GetArticleMarkdown(ctx context.Context, id string) (string, error) {
+	html, err := c.GetArticleHTML(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	conv := md.NewConverter("", true, nil)
+	return conv.ConvertString(html)
+}
+
+func mergeLabels(existing, add []string) []string {
+	seen := make(map[string]struct{}, len(existing))
+	out := make([]string, 0, len(existing)+len(add))
+	for _, l := range existing {
+		seen[l] = struct{}{}
+		out = append(out, l)
+	}
+	for _, l := range add {
+		if _, ok := seen[l]; ok {
+			continue
+		}
+		seen[l] = struct{}{}
+		out = append(out, l)
+	}
+	return out
+}
+
+func filterLabels(existing, remove []string) []string {
+	rm := make(map[string]struct{}, len(remove))
+	for _, l := range remove {
+		rm[l] = struct{}{}
+	}
+	out := make([]string, 0, len(existing))
+	for _, l := range existing {
+		if _, drop := rm[l]; drop {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// BoolPtr returns a pointer to b — handy for UpdateInput's *bool fields
+// in callers that build literal patches.
+func BoolPtr(b bool) *bool { return &b }
