@@ -13,7 +13,6 @@ import (
 type Config struct {
 	Telegram TelegramConfig `toml:"telegram"`
 	Readeck  ReadeckConfig  `toml:"readeck"`
-	MCP      MCPConfig      `toml:"mcp"`
 	Tenants  []Tenant       `toml:"tenants"`
 }
 
@@ -23,15 +22,6 @@ type TelegramConfig struct {
 
 type ReadeckConfig struct {
 	BaseURL string `toml:"base_url"`
-}
-
-// MCPConfig configures the standalone MCP server. Tenant names the
-// [[tenants]] entry (by .note) whose readeck_token the MCP uses for all
-// calls — MCP is single-user by design.
-type MCPConfig struct {
-	Listen      string `toml:"listen"`       // default ":8080"
-	Tenant      string `toml:"tenant"`       // matches [[tenants]].note
-	BearerToken string `toml:"bearer_token"` // optional auth on the HTTP endpoint
 }
 
 // Tenant pairs a Telegram user with the Readeck token the bot should use

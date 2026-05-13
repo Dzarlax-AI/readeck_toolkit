@@ -3,7 +3,7 @@
 A Telegram bot and an MCP server for [Readeck](https://readeck.org/), in one Go module.
 
 - **Telegram bot** — multi-tenant. Forward a URL to the bot, it saves to Readeck under the right user. Append `#tags` to set labels.
-- **MCP server** — single-tenant. Exposes Readeck as tools (`readeck_save`, `readeck_search`, `readeck_list_recent`) to any MCP client (Claude Desktop, Claude Code, Cursor, etc.).
+- **MCP server** — credential-less. Exposes Readeck as tools (`readeck_save`, `readeck_search`, `readeck_list_recent`) to any MCP client (Claude Desktop, Claude Code, Cursor, etc.). Each client passes its own Readeck token over the wire — the server stores no secrets.
 
 Both share one Go module and one Docker image — pick which binary to run via the container `command:`.
 
@@ -36,23 +36,38 @@ Unknown senders are silently ignored, so the bot is safe to leave running while 
 
 ### MCP
 
-If you're already running the bot, the MCP reads the **same** `config.toml`. Add an `[mcp]` block:
+The MCP server only needs to know the base URL of your Readeck instance. Tokens are not stored on the server — they're passed by each MCP client when connecting.
 
-```toml
-[mcp]
-tenant = "alice"   # matches one of the [[tenants]].note values
+If you're already running the bot, MCP reads `[readeck].base_url` from the same `config.toml`. Otherwise set `READECK_BASE_URL` env.
+
+```bash
+docker compose up -d mcp
 ```
 
-Then `docker compose up -d mcp` and point an MCP client at `http://localhost:8080/sse`.
+Then in your MCP client config (Claude Code / Claude Desktop / Cursor / etc.):
 
-If you'd rather skip the TOML entirely (e.g. running just the MCP, no Telegram bot), copy `.env.example` to `.env` and use the env-only fallback — same image, just drop the `-config` flag in compose.
+```json
+{
+  "mcpServers": {
+    "readeck": {
+      "transport": "sse",
+      "url": "https://your-mcp-host/sse",
+      "headers": {
+        "X-API-Key": "rk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+    }
+  }
+}
+```
+
+The token is generated in Readeck → **Settings → API tokens**. Each user of the MCP server uses their own token; the server hands the call straight to Readeck which scopes it to that user.
+
+`Authorization: Bearer <token>` is also accepted as a fallback for MCP clients that only know how to send that header.
 
 ## Configuration
 
 - **Bot**: `config.toml`. Env overrides: `TELEGRAM_TOKEN`, `READECK_BASE_URL`.
-- **MCP**: either `-config config.toml` (uses `[mcp]` + `[[tenants]]`) **or** env vars (`READECK_BASE_URL`, `READECK_API_TOKEN`, `MCP_HTTP_ADDR`, `MCP_BEARER_TOKEN`). Env always wins where set, so a TOML deploy can still patch individual fields from the environment.
-
-If `mcp.bearer_token` / `MCP_BEARER_TOKEN` is set, the SSE endpoint requires `Authorization: Bearer <token>`. Leave empty when fronted by an authenticating reverse proxy.
+- **MCP**: just needs `READECK_BASE_URL` (env or `[readeck].base_url` in TOML). Optional: `MCP_HTTP_ADDR` to change the bind address from `:8080`.
 
 ## Build from source
 

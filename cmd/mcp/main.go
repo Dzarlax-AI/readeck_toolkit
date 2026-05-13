@@ -1,11 +1,15 @@
 // Command readeck-mcp is an MCP HTTP/SSE server that exposes Readeck as a set
-// of tools to any MCP-compatible client. Single-tenant by design.
+// of tools. The server is stateless with respect to credentials — each
+// connecting client supplies its own Readeck API token via the X-API-Key
+// header, and tool calls run under that token.
 //
-// Configuration:
-//   - Preferred: -config /path/to/config.toml (same file the bot reads).
-//     The [mcp] section names which [[tenants]] entry to use.
-//   - Fallback: env-only mode (READECK_BASE_URL + READECK_API_TOKEN).
-//     Convenient when you're running just the MCP without the bot.
+// Configuration is minimal:
+//
+//	READECK_BASE_URL    (required) public URL of the Readeck instance
+//	MCP_HTTP_ADDR       bind address, default ":8080"
+//
+// Or pass -config /path/to/config.toml and the base URL is read from
+// [readeck].base_url. Tokens never live on the server.
 package main
 
 import (
@@ -19,93 +23,47 @@ import (
 
 	"github.com/dzarlax/readeck_toolkit/internal/bot"
 	"github.com/dzarlax/readeck_toolkit/internal/mcp"
-	"github.com/dzarlax/readeck_toolkit/internal/readeck"
 )
 
 func main() {
-	cfgPath := flag.String("config", "", "optional path to shared config.toml (bot+mcp). When empty, fall back to env vars.")
+	cfgPath := flag.String("config", "", "optional config.toml — only [readeck].base_url is read")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	baseURL, token, addr, bearer, err := resolve(*cfgPath)
+	baseURL, addr, err := resolve(*cfgPath)
 	if err != nil {
 		log.Error("config", "err", err)
 		os.Exit(1)
 	}
 
-	client := readeck.NewClient(baseURL, token)
-	s := mcp.New(client, baseURL)
+	s := mcp.New(baseURL)
+	sse := server.NewSSEServer(s, server.WithSSEContextFunc(mcp.ExtractTokenFromHTTP))
 
-	sse := server.NewSSEServer(s)
-	var handler http.Handler = sse
-	if bearer != "" {
-		handler = withBearer(handler, bearer)
-	}
-
-	log.Info("mcp server starting", "addr", addr, "bearer_auth", bearer != "", "base_url", baseURL)
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	log.Info("mcp server starting", "addr", addr, "base_url", baseURL)
+	if err := http.ListenAndServe(addr, sse); err != nil {
 		log.Error("server", "err", err)
 		os.Exit(1)
 	}
 }
 
-// resolve unifies config-file and env-only modes. Env vars always win where
-// set, so a docker-compose deploy that reads from TOML can still patch
-// individual fields with env overrides.
-func resolve(cfgPath string) (baseURL, token, addr, bearer string, err error) {
+func resolve(cfgPath string) (baseURL, addr string, err error) {
 	addr = ":8080"
-
 	if cfgPath != "" {
 		cfg, lerr := bot.Load(cfgPath)
 		if lerr != nil {
-			return "", "", "", "", lerr
+			return "", "", lerr
 		}
 		baseURL = cfg.Readeck.BaseURL
-		if cfg.MCP.Listen != "" {
-			addr = cfg.MCP.Listen
-		}
-		bearer = cfg.MCP.BearerToken
-		if cfg.MCP.Tenant == "" {
-			return "", "", "", "", fmt.Errorf("mcp.tenant is required when using -config (names a [[tenants]].note)")
-		}
-		t, ok := cfg.TenantByNote(cfg.MCP.Tenant)
-		if !ok {
-			return "", "", "", "", fmt.Errorf("[[tenants]] with note=%q not found", cfg.MCP.Tenant)
-		}
-		token = t.ReadeckToken
 	}
-
-	// env overrides / fallback for env-only mode
 	if v := os.Getenv("READECK_BASE_URL"); v != "" {
 		baseURL = v
-	}
-	if v := os.Getenv("READECK_API_TOKEN"); v != "" {
-		token = v
 	}
 	if v := os.Getenv("MCP_HTTP_ADDR"); v != "" {
 		addr = v
 	}
-	if v := os.Getenv("MCP_BEARER_TOKEN"); v != "" {
-		bearer = v
+	if baseURL == "" {
+		return "", "", fmt.Errorf("READECK_BASE_URL or [readeck].base_url is required")
 	}
-
-	if baseURL == "" || token == "" {
-		return "", "", "", "", fmt.Errorf("READECK_BASE_URL and READECK_API_TOKEN are required (or pass -config)")
-	}
-	return baseURL, token, addr, bearer, nil
-}
-
-// withBearer rejects requests that don't present the configured bearer token.
-// When MCP_BEARER_TOKEN is empty, this wrapper isn't installed and the server
-// is open — intended for stdio-style local-only use behind a reverse proxy
-// that authenticates externally.
-func withBearer(next http.Handler, expected string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+expected {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return baseURL, addr, nil
 }
