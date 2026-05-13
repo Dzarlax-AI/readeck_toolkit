@@ -59,8 +59,8 @@ Then in your MCP client config (Claude Code / Claude Desktop / Cursor / etc.):
 {
   "mcpServers": {
     "readeck": {
-      "transport": "sse",
-      "url": "https://your-mcp-host/sse",
+      "type": "http",
+      "url": "https://your-mcp-host/mcp",
       "headers": {
         "X-API-Key": "rk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
       }
