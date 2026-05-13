@@ -7,6 +7,11 @@
 //
 //	READECK_BASE_URL    (required) public URL of the Readeck instance
 //	MCP_HTTP_ADDR       bind address, default ":8080"
+//	MCP_BASE_PATH       path prefix the SSE endpoint is exposed under
+//	                    when fronted by a reverse proxy that strips it
+//	                    before forwarding. Example: "/readeck" when
+//	                    traefik routes mcp.example.com/readeck/* here.
+//	                    Defaults to "" (no prefix).
 //
 // Or pass -config /path/to/config.toml and the base URL is read from
 // [readeck].base_url. Tokens never live on the server.
@@ -31,28 +36,32 @@ func main() {
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	baseURL, addr, err := resolve(*cfgPath)
+	baseURL, addr, basePath, err := resolve(*cfgPath)
 	if err != nil {
 		log.Error("config", "err", err)
 		os.Exit(1)
 	}
 
 	s := mcp.New(baseURL)
-	sse := server.NewSSEServer(s, server.WithSSEContextFunc(mcp.ExtractTokenFromHTTP))
+	opts := []server.SSEOption{server.WithSSEContextFunc(mcp.ExtractTokenFromHTTP)}
+	if basePath != "" {
+		opts = append(opts, server.WithBasePath(basePath))
+	}
+	sse := server.NewSSEServer(s, opts...)
 
-	log.Info("mcp server starting", "addr", addr, "base_url", baseURL)
+	log.Info("mcp server starting", "addr", addr, "base_url", baseURL, "base_path", basePath)
 	if err := http.ListenAndServe(addr, sse); err != nil {
 		log.Error("server", "err", err)
 		os.Exit(1)
 	}
 }
 
-func resolve(cfgPath string) (baseURL, addr string, err error) {
+func resolve(cfgPath string) (baseURL, addr, basePath string, err error) {
 	addr = ":8080"
 	if cfgPath != "" {
 		cfg, lerr := bot.Load(cfgPath)
 		if lerr != nil {
-			return "", "", lerr
+			return "", "", "", lerr
 		}
 		baseURL = cfg.Readeck.BaseURL
 	}
@@ -62,8 +71,11 @@ func resolve(cfgPath string) (baseURL, addr string, err error) {
 	if v := os.Getenv("MCP_HTTP_ADDR"); v != "" {
 		addr = v
 	}
-	if baseURL == "" {
-		return "", "", fmt.Errorf("READECK_BASE_URL or [readeck].base_url is required")
+	if v := os.Getenv("MCP_BASE_PATH"); v != "" {
+		basePath = v
 	}
-	return baseURL, addr, nil
+	if baseURL == "" {
+		return "", "", "", fmt.Errorf("READECK_BASE_URL or [readeck].base_url is required")
+	}
+	return baseURL, addr, basePath, nil
 }
