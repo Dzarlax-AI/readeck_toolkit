@@ -18,10 +18,21 @@ The MCP server doesn't multi-tenant because an MCP client is, by definition, one
 ### Bot
 
 1. Create a bot with [@BotFather](https://t.me/BotFather), grab the token.
-2. In Readeck → **Settings → API tokens**, create a token for each user.
-3. `cp config.example.toml config.toml` and fill in.
+2. `cp config.example.toml config.toml`, paste the bot token, set `base_url`.
+3. Add yourself to `[[tenants]]`:
+   - in Readeck → **Settings → API tokens** → create a token, paste as `readeck_token`
+   - run the bot once and DM it `/whoami` to get your `telegram_id`
 4. `docker compose up -d bot`
-5. Have each user say `/whoami` to the bot to discover their Telegram ID. Put it into `config.toml` and restart.
+
+#### Adding more users later
+
+Repeat for each new user:
+
+1. The user logs into Readeck and creates their own API token (Settings → API tokens).
+2. They start the bot and send `/whoami` — the bot replies with their numeric Telegram id (works for non-tenants too — that's the onboarding hook).
+3. Admin appends a new `[[tenants]]` block to `config.toml` with the two values, then `docker compose restart bot`.
+
+Unknown senders are silently ignored, so the bot is safe to leave running while users onboard themselves.
 
 ### MCP
 

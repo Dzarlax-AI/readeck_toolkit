@@ -1,19 +1,50 @@
 [telegram]
-# Telegram bot token from @BotFather.
+# Telegram bot token from @BotFather. The bot itself can be reused across
+# Readeck installs — only the token matters here.
 token = "1234567890:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 [readeck]
 # Public base URL of your Readeck instance, no trailing slash.
 base_url = "https://read.example.com"
 
-# Multi-tenant: each [[tenants]] block maps a Telegram user to the Readeck API
-# token the bot should use when that user sends a URL.
+
+# =============================================================================
+#  TENANTS — one [[tenants]] block per user the bot is allowed to serve
+# =============================================================================
 #
-# Workflow to add a new user:
-#   1. Open Readeck → Settings → API tokens, create a token, copy it.
-#   2. Add a temporary entry below with a fake telegram_id (e.g. 0). Start the bot.
-#   3. Have the user message the bot /whoami — they get back their real ID.
-#   4. Replace the fake ID, restart.
+# How the bot uses these:
+#
+#   - Telegram message arrives → bot looks up sender's telegram_id in this list.
+#   - No match → silently ignored (so port scanners / strangers see nothing).
+#   - Match → bot calls Readeck API with that user's readeck_token, so the
+#     bookmark lands in their account.
+#
+# Adding a new user (one-time, ~2 minutes):
+#
+#   1. Make sure the user has a Readeck account. Either:
+#      - they sign in via SSO and get auto-provisioned, OR
+#      - the admin creates them in Readeck UI → Settings → Users.
+#
+#   2. The user logs into Readeck → Settings → API tokens → "Create new"
+#      → copies the generated rk_… string and sends it to the admin.
+#      (A token grants full access to that user's bookmarks. Treat as a
+#      password. Rotate by deleting and creating a new one in the UI.)
+#
+#   3. The user starts the bot in Telegram and sends `/whoami`. The bot
+#      replies with their Telegram user id — a number like 388128.
+#      (`/whoami` works even for non-tenants — it's the onboarding hook.)
+#
+#   4. Admin adds a new [[tenants]] block below with that telegram_id and
+#      readeck_token. Restart the bot:  docker compose restart bot
+#
+#   5. The user says /start to the bot. If they see "Send me a URL…",
+#      they're in.
+#
+# Removing a user: delete their [[tenants]] block, restart the bot.
+# (Don't forget to also revoke their Readeck token in the UI if you want
+# to fully cut access.)
+#
+# The `note` field is free-form, only for the operator. The bot ignores it.
 
 [[tenants]]
 telegram_id   = 12345678
@@ -23,4 +54,9 @@ note          = "alice"
 # [[tenants]]
 # telegram_id   = 98765432
 # readeck_token = "rk_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
-# note          = "bob"
+# note          = "bob — partner"
+
+# [[tenants]]
+# telegram_id   = 11223344
+# readeck_token = "rk_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+# note          = "carol — colleague"
