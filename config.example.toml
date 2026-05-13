@@ -9,6 +9,24 @@ base_url = "https://read.example.com"
 
 
 # =============================================================================
+#  MCP — config for the standalone MCP server (cmd/mcp)
+# =============================================================================
+# Optional. The bot ignores this section, and the MCP can also run env-only
+# (see .env.example) if you'd rather keep credentials out of TOML.
+#
+# tenant     — names a [[tenants]] entry below by its .note. MCP is single-user
+#              and will use that tenant's readeck_token for every call.
+# listen     — bind address, default ":8080".
+# bearer_token — if set, the SSE endpoint requires `Authorization: Bearer …`.
+#                Leave empty when fronted by an authenticating reverse proxy.
+
+[mcp]
+tenant       = "alice"
+listen       = ":8080"
+bearer_token = ""
+
+
+# =============================================================================
 #  TENANTS — one [[tenants]] block per user the bot is allowed to serve
 # =============================================================================
 #

@@ -36,16 +36,23 @@ Unknown senders are silently ignored, so the bot is safe to leave running while 
 
 ### MCP
 
-1. `cp .env.example .env` and fill in.
-2. `docker compose up -d mcp`
-3. Point an MCP client at `http://localhost:8080/sse`.
+If you're already running the bot, the MCP reads the **same** `config.toml`. Add an `[mcp]` block:
+
+```toml
+[mcp]
+tenant = "alice"   # matches one of the [[tenants]].note values
+```
+
+Then `docker compose up -d mcp` and point an MCP client at `http://localhost:8080/sse`.
+
+If you'd rather skip the TOML entirely (e.g. running just the MCP, no Telegram bot), copy `.env.example` to `.env` and use the env-only fallback — same image, just drop the `-config` flag in compose.
 
 ## Configuration
 
-- **Bot** reads `config.toml`. Env overrides: `TELEGRAM_TOKEN`, `READECK_BASE_URL` (useful for compose secrets).
-- **MCP** reads env: `READECK_BASE_URL`, `READECK_API_TOKEN`, `MCP_HTTP_ADDR` (default `:8080`), `MCP_BEARER_TOKEN` (optional).
+- **Bot**: `config.toml`. Env overrides: `TELEGRAM_TOKEN`, `READECK_BASE_URL`.
+- **MCP**: either `-config config.toml` (uses `[mcp]` + `[[tenants]]`) **or** env vars (`READECK_BASE_URL`, `READECK_API_TOKEN`, `MCP_HTTP_ADDR`, `MCP_BEARER_TOKEN`). Env always wins where set, so a TOML deploy can still patch individual fields from the environment.
 
-If `MCP_BEARER_TOKEN` is set, the SSE endpoint requires `Authorization: Bearer <token>`. Leave empty when fronted by an authenticating reverse proxy.
+If `mcp.bearer_token` / `MCP_BEARER_TOKEN` is set, the SSE endpoint requires `Authorization: Bearer <token>`. Leave empty when fronted by an authenticating reverse proxy.
 
 ## Build from source
 

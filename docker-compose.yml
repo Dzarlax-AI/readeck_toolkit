@@ -13,7 +13,12 @@ services:
   mcp:
     image: ghcr.io/dzarlax-ai/readeck-toolkit:latest
     restart: always
-    command: ["readeck-mcp"]
-    env_file: .env
+    # Reads the same config.toml as the bot. [mcp].tenant selects which
+    # tenant's token to use. To run MCP without a bot, swap to env-only:
+    #   command: ["readeck-mcp"]
+    #   env_file: .env
+    command: ["readeck-mcp", "-config", "/etc/readeck/config.toml"]
+    volumes:
+      - ./config.toml:/etc/readeck/config.toml:ro
     ports:
       - "8080:8080"

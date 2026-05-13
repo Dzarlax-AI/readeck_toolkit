@@ -22,6 +22,10 @@ func main() {
 		log.Error("load config", "err", err)
 		os.Exit(1)
 	}
+	if err := cfg.ValidateForBot(); err != nil {
+		log.Error("invalid config", "err", err)
+		os.Exit(1)
+	}
 	b, err := bot.New(cfg, log)
 	if err != nil {
 		log.Error("init bot", "err", err)
