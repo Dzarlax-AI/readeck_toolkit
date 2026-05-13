@@ -1,8 +1,23 @@
 # Standalone compose for running readeck_toolkit on its own.
 # For VPS deploy alongside the rest of personal_ai_stack, see
 # personal_ai_stack/deploy/readeck-toolkit/.
+#
+# Both services start with `docker compose up -d`. To run only one,
+# name it on the command line:
+#
+#   docker compose up -d mcp       # only the MCP server
+#   docker compose up -d bot       # only the Telegram bot
+#
+# To turn one off without removing the config:
+#
+#   docker compose stop bot
+#
+# Neither service is required by the other — config sections they
+# don't use are simply ignored.
 
 services:
+  # Telegram bot. Reads [telegram] and [[tenants]] from config.toml.
+  # Skip this service if you don't need the bot.
   bot:
     image: ghcr.io/dzarlax-ai/readeck-toolkit:latest
     restart: always
@@ -10,13 +25,12 @@ services:
     volumes:
       - ./config.toml:/etc/readeck/config.toml:ro
 
+  # MCP HTTP/SSE server. Reads only [readeck].base_url. Each MCP client
+  # supplies its own Readeck token via the X-API-Key header.
+  # Skip this service if you don't need MCP.
   mcp:
     image: ghcr.io/dzarlax-ai/readeck-toolkit:latest
     restart: always
-    # Reads the same config.toml as the bot. [mcp].tenant selects which
-    # tenant's token to use. To run MCP without a bot, swap to env-only:
-    #   command: ["readeck-mcp"]
-    #   env_file: .env
     command: ["readeck-mcp", "-config", "/etc/readeck/config.toml"]
     volumes:
       - ./config.toml:/etc/readeck/config.toml:ro

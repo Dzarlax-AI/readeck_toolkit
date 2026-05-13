@@ -5,7 +5,16 @@ A Telegram bot and an MCP server for [Readeck](https://readeck.org/), in one Go 
 - **Telegram bot** — multi-tenant. Forward a URL to the bot, it saves to Readeck under the right user. Append `#tags` to set labels.
 - **MCP server** — credential-less. Exposes Readeck as tools (`readeck_save`, `readeck_search`, `readeck_list_recent`) to any MCP client (Claude Desktop, Claude Code, Cursor, etc.). Each client passes its own Readeck token over the wire — the server stores no secrets.
 
-Both share one Go module and one Docker image — pick which binary to run via the container `command:`.
+Both share one Go module and one Docker image. The included `docker-compose.yml` defines both services — start whichever you need:
+
+```bash
+docker compose up -d              # both
+docker compose up -d mcp          # only MCP server
+docker compose up -d bot          # only Telegram bot
+docker compose stop bot           # turn one off later
+```
+
+Each service ignores config sections it doesn't use, so you can have an MCP-only deploy without filling in `[telegram]` / `[[tenants]]`, and vice versa.
 
 ## Why multi-tenant on the bot?
 
