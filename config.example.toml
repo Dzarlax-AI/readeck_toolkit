@@ -1,0 +1,26 @@
+[telegram]
+# Telegram bot token from @BotFather.
+token = "1234567890:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+[readeck]
+# Public base URL of your Readeck instance, no trailing slash.
+base_url = "https://read.example.com"
+
+# Multi-tenant: each [[tenants]] block maps a Telegram user to the Readeck API
+# token the bot should use when that user sends a URL.
+#
+# Workflow to add a new user:
+#   1. Open Readeck → Settings → API tokens, create a token, copy it.
+#   2. Add a temporary entry below with a fake telegram_id (e.g. 0). Start the bot.
+#   3. Have the user message the bot /whoami — they get back their real ID.
+#   4. Replace the fake ID, restart.
+
+[[tenants]]
+telegram_id   = 12345678
+readeck_token = "rk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+note          = "alice"
+
+# [[tenants]]
+# telegram_id   = 98765432
+# readeck_token = "rk_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+# note          = "bob"

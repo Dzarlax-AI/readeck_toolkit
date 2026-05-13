@@ -1,0 +1,16 @@
+# local secrets / instance config
+config.toml
+.env
+
+# build output
+/out
+/bin
+
+# editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# go test cache
+*.test
+*.local.*
