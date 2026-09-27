@@ -3,7 +3,9 @@
 A Telegram bot and an MCP server for [Readeck](https://readeck.org/), in one Go module.
 
 - **Telegram bot** — multi-tenant. Forward a URL to the bot, it saves to Readeck under the right user. Append `#tags` to set labels.
-- **MCP server** — credential-less. Exposes Readeck as tools (`readeck_save`, `readeck_search`, `readeck_list_recent`) to any MCP client (Claude Desktop, Claude Code, Cursor, etc.). Each client passes its own Readeck token over the wire — the server stores no secrets.
+- **MCP server** — credential-less. Exposes Readeck as tools (`readeck_save`, `readeck_search`, `readeck_find_by_url`, `readeck_list_recent`) to any MCP client (Claude Desktop, Claude Code, Cursor, etc.). Each client passes its own Readeck token over the wire — the server stores no secrets.
+
+`readeck_search` searches bookmark text. Use `readeck_find_by_url` to look up a saved URL exactly, including its path and query string. The URL lookup ignores fragments, host casing, and default ports.
 
 Both share one Go module and one Docker image. The included `docker-compose.yml` defines both services — start whichever you need:
 

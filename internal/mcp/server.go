@@ -113,7 +113,7 @@ func New(baseURL string) *server.MCPServer {
 
 	// ---------- search ----------
 	s.AddTool(mcpgo.NewTool("readeck_search",
-		mcpgo.WithDescription("Full-text search across saved bookmarks."),
+		mcpgo.WithDescription("Full-text search across saved bookmarks. For an exact URL, use readeck_find_by_url."),
 		mcpgo.WithString("query", mcpgo.Required(), mcpgo.Description("Search query")),
 		mcpgo.WithNumber("limit", mcpgo.Description("Max results (default 20)")),
 	), func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -129,6 +129,25 @@ func New(baseURL string) *server.MCPServer {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		return mcpgo.NewToolResultText(formatList(baseURL, items)), nil
+	})
+
+	// ---------- exact URL lookup ----------
+	s.AddTool(mcpgo.NewTool("readeck_find_by_url",
+		mcpgo.WithDescription("Find a saved bookmark by its exact URL, including path and query string. Ignores URL fragment, host casing, and default port."),
+		mcpgo.WithString("url", mcpgo.Required(), mcpgo.Description("Full http(s) URL to find")),
+	), func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		client, errResult := withClient(ctx)
+		if errResult != nil {
+			return errResult, nil
+		}
+		bm, err := client.FindByURL(ctx, req.GetString("url", ""))
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if bm == nil {
+			return mcpgo.NewToolResultText("(no bookmark found)"), nil
+		}
+		return mcpgo.NewToolResultText(formatList(baseURL, []readeck.Bookmark{*bm})), nil
 	})
 
 	// ---------- list recent ----------
