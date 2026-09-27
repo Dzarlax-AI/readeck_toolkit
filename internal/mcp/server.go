@@ -47,6 +47,7 @@ func ExtractTokenFromHTTP(ctx context.Context, r *http.Request) context.Context 
 	return context.WithValue(ctx, tokenKey{}, token)
 }
 
+// tokenFromContext returns the Readeck token stored in a request context.
 func tokenFromContext(ctx context.Context) string {
 	s, _ := ctx.Value(tokenKey{}).(string)
 	return s
@@ -106,6 +107,9 @@ func New(baseURL string) *server.MCPServer {
 			"id":        bm.ID,
 			"permalink": readeck.PermalinkOf(baseURL, bm.ID),
 			"title":     bm.Title,
+		}
+		if bm.ReadBackWarning != "" {
+			out["readback_warning"] = bm.ReadBackWarning
 		}
 		b, _ := json.Marshal(out)
 		return mcpgo.NewToolResultText(string(b)), nil
@@ -285,6 +289,7 @@ func New(baseURL string) *server.MCPServer {
 	return s
 }
 
+// formatList formats bookmark summaries with their Readeck permalinks.
 func formatList(baseURL string, items []readeck.Bookmark) string {
 	if len(items) == 0 {
 		return "(no bookmarks)"

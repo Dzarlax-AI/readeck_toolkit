@@ -9,6 +9,7 @@ import (
 	"testing"
 )
 
+// TestCreateBookmarkReadBack covers the POST identity headers and GET result.
 func TestCreateBookmarkReadBack(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -89,27 +90,43 @@ func TestCreateBookmarkReadBack(t *testing.T) {
 	}
 }
 
+// TestCreateBookmarkErrorsPreserveStatusAndBody retains useful POST failure details.
 func TestCreateBookmarkErrorsPreserveStatusAndBody(t *testing.T) {
-	for _, failedMethod := range []string{"POST", "GET"} {
-		t.Run(failedMethod, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == failedMethod {
-					w.WriteHeader(http.StatusUnprocessableEntity)
-					fmt.Fprint(w, `{"message":"invalid link"}`)
-					return
-				}
-				w.Header().Set("bookmark-id", "created-id")
-				w.WriteHeader(http.StatusAccepted)
-			}))
-			defer srv.Close()
-			_, err := NewClient(srv.URL, "token").CreateBookmark(context.Background(), CreateInput{URL: "https://example.com"})
-			if err == nil || !strings.Contains(err.Error(), "422") || !strings.Contains(err.Error(), "invalid link") {
-				t.Fatalf("error = %v, want status and body", err)
-			}
-		})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		fmt.Fprint(w, `{"message":"invalid link"}`)
+	}))
+	defer srv.Close()
+	_, err := NewClient(srv.URL, "token").CreateBookmark(context.Background(), CreateInput{URL: "https://example.com"})
+	if err == nil || !strings.Contains(err.Error(), "422") || !strings.Contains(err.Error(), "invalid link") {
+		t.Fatalf("error = %v, want status and body", err)
 	}
 }
 
+// TestCreateBookmarkReadBackFailureReturnsCreatedID marks a committed save as successful.
+func TestCreateBookmarkReadBackFailureReturnsCreatedID(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.Header().Set("bookmark-id", "created-id")
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprint(w, `{"status":202,"message":"Link submited"}`)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"message":"temporarily unavailable"}`)
+	}))
+	defer srv.Close()
+
+	bm, err := NewClient(srv.URL, "token").CreateBookmark(context.Background(), CreateInput{URL: "https://example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bm.ID != "created-id" || bm.ReadBackWarning == "" || !strings.Contains(bm.ReadBackWarning, "503") || !strings.Contains(bm.ReadBackWarning, "temporarily unavailable") {
+		t.Fatalf("bookmark = %+v", bm)
+	}
+}
+
+// TestNormalizeBookmarkURL checks the equivalences used for exact lookup.
 func TestNormalizeBookmarkURL(t *testing.T) {
 	a, err := normalizeBookmarkURL("  HTTPS://EXAMPLE.COM:443/story?x=1#section  ")
 	if err != nil || a != "https://example.com/story?x=1" {
@@ -126,6 +143,7 @@ func TestNormalizeBookmarkURL(t *testing.T) {
 	}
 }
 
+// TestFindByURLMatchesFullURLAcrossPages preserves pagination and exact matching.
 func TestFindByURLMatchesFullURLAcrossPages(t *testing.T) {
 	var offsets []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -156,6 +174,7 @@ func TestFindByURLMatchesFullURLAcrossPages(t *testing.T) {
 	}
 }
 
+// TestFindByURLNotFound returns nil when the collection has no URL match.
 func TestFindByURLNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `[]`)
@@ -164,5 +183,23 @@ func TestFindByURLNotFound(t *testing.T) {
 	bm, err := NewClient(srv.URL, "token").FindByURL(context.Background(), "https://example.com/missing")
 	if err != nil || bm != nil {
 		t.Fatalf("bookmark = %+v, error = %v", bm, err)
+	}
+}
+
+// TestFindByURLStopsOnRepeatedPages prevents unbounded requests if offsets are ignored.
+func TestFindByURLStopsOnRepeatedPages(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		fmt.Fprint(w, `[{"id":"same-page","url":"https://example.com/other"}]`)
+	}))
+	defer srv.Close()
+
+	bm, err := NewClient(srv.URL, "token").FindByURL(context.Background(), "https://example.com/missing")
+	if err != nil || bm != nil {
+		t.Fatalf("bookmark = %+v, error = %v", bm, err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want 2", requests)
 	}
 }

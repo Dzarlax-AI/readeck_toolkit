@@ -7,6 +7,7 @@ package readeck
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,6 +52,8 @@ type Bookmark struct {
 	IsMarked    bool     `json:"is_marked"`
 	Labels      []string `json:"labels"`
 	Href        string   `json:"href,omitempty"`
+	// ReadBackWarning is set when creation succeeded but bookmark details could not be read back.
+	ReadBackWarning string `json:"-"`
 }
 
 // CreateInput is the request body for POST /api/bookmarks.
@@ -69,6 +72,7 @@ type ListOpts struct {
 	Archived bool // narrow to is_archived=true
 }
 
+// do sends a Readeck request and decodes its response into out when provided.
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
 	resp, err := c.request(ctx, method, path, body)
 	if err != nil {
@@ -81,6 +85,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	return nil
 }
 
+// request sends an authenticated Readeck request and leaves a successful response body open.
 func (c *Client) request(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
@@ -114,7 +119,9 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 
 // CreateBookmark posts a new bookmark. Readeck does content extraction
 // asynchronously, so the returned object may have an empty title/description
-// — they'll be populated by the time the user opens it in the UI.
+// — they'll be populated by the time the user opens it in the UI. If creation
+// succeeds but read-back fails, the returned bookmark contains its ID and a
+// ReadBackWarning so callers don't report a completed write as failed.
 func (c *Client) CreateBookmark(ctx context.Context, in CreateInput) (*Bookmark, error) {
 	resp, err := c.request(ctx, http.MethodPost, "/api/bookmarks", in)
 	if err != nil {
@@ -131,14 +138,18 @@ func (c *Client) CreateBookmark(ctx context.Context, in CreateInput) (*Bookmark,
 	}
 	bm, err := c.GetBookmark(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("readeck created bookmark %q but read-back failed: %w", id, err)
+		return &Bookmark{ID: id, ReadBackWarning: fmt.Sprintf("readeck GET /api/bookmarks/%s failed: %v", url.PathEscape(id), err)}, nil
 	}
 	if bm.ID == "" {
-		return nil, fmt.Errorf("readeck GET /api/bookmarks/%s returned a bookmark without an id", url.PathEscape(id))
+		return &Bookmark{ID: id, ReadBackWarning: fmt.Sprintf("readeck GET /api/bookmarks/%s returned a bookmark without an id", url.PathEscape(id))}, nil
+	}
+	if bm.ID != id {
+		return &Bookmark{ID: id, ReadBackWarning: fmt.Sprintf("readeck GET /api/bookmarks/%s returned a different bookmark id %q", url.PathEscape(id), bm.ID)}, nil
 	}
 	return bm, nil
 }
 
+// bookmarkIDFromLocation extracts the final path component, ignoring query and fragment data.
 func bookmarkIDFromLocation(location string) string {
 	u, err := url.Parse(strings.TrimSpace(location))
 	if err != nil {
@@ -189,6 +200,7 @@ func (c *Client) FindByURL(ctx context.Context, rawURL string) (*Bookmark, error
 		return nil, err
 	}
 	const pageSize = 100
+	seenPages := make(map[[sha256.Size]byte]struct{})
 	for offset := 0; ; {
 		items, err := c.ListBookmarks(ctx, ListOpts{Limit: pageSize, Offset: offset})
 		if err != nil {
@@ -203,8 +215,27 @@ func (c *Client) FindByURL(ctx context.Context, rawURL string) (*Bookmark, error
 				return &items[i], nil
 			}
 		}
+		fingerprint := bookmarkPageFingerprint(items)
+		if _, seen := seenPages[fingerprint]; seen {
+			return nil, nil
+		}
+		seenPages[fingerprint] = struct{}{}
 		offset += len(items)
 	}
+}
+
+// bookmarkPageFingerprint identifies repeated URL lookup pages by their bookmark IDs and URLs.
+func bookmarkPageFingerprint(items []Bookmark) [sha256.Size]byte {
+	h := sha256.New()
+	for _, item := range items {
+		_, _ = h.Write([]byte(item.ID))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(item.URL))
+		_, _ = h.Write([]byte{0})
+	}
+	var fingerprint [sha256.Size]byte
+	copy(fingerprint[:], h.Sum(nil))
+	return fingerprint
 }
 
 // normalizeBookmarkURL ignores spelling differences that do not identify a
