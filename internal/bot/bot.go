@@ -63,6 +63,7 @@ func (b *Bot) handleWhoAmI(c tele.Context) error {
 	return c.Reply(fmt.Sprintf("Your Telegram ID: %d", c.Sender().ID))
 }
 
+// handleText saves every URL in an authorized Telegram message to Readeck.
 func (b *Bot) handleText(c tele.Context) error {
 	token, ok := b.cfg.TokenFor(c.Sender().ID)
 	if !ok {
@@ -86,12 +87,19 @@ func (b *Bot) handleText(c tele.Context) error {
 			msgs = append(msgs, fmt.Sprintf("❌ %s\n%s", u, shortErr(err)))
 			continue
 		}
+		if bm.ReadBackWarning != "" {
+			b.log.Warn("bookmark created but read-back failed", "warning", bm.ReadBackWarning, "url", u, "tg_id", c.Sender().ID)
+		}
 		link := readeck.PermalinkOf(b.cfg.Readeck.BaseURL, bm.ID)
 		title := bm.Title
 		if title == "" {
 			title = u
 		}
-		msgs = append(msgs, fmt.Sprintf("✅ %s\n%s", title, link))
+		msg := fmt.Sprintf("✅ %s\n%s", title, link)
+		if bm.ReadBackWarning != "" {
+			msg += "\n⚠️ Saved; bookmark details could not be loaded yet."
+		}
+		msgs = append(msgs, msg)
 	}
 	return c.Reply(strings.Join(msgs, "\n\n"))
 }

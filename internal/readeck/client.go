@@ -7,9 +7,11 @@ package readeck
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -50,6 +52,8 @@ type Bookmark struct {
 	IsMarked    bool     `json:"is_marked"`
 	Labels      []string `json:"labels"`
 	Href        string   `json:"href,omitempty"`
+	// ReadBackWarning is set when creation succeeded but bookmark details could not be read back.
+	ReadBackWarning string `json:"-"`
 }
 
 // CreateInput is the request body for POST /api/bookmarks.
@@ -63,22 +67,37 @@ type CreateInput struct {
 type ListOpts struct {
 	Search   string
 	Limit    int
+	Offset   int
 	Unread   bool // narrow to is_archived=false
 	Archived bool // narrow to is_archived=true
 }
 
+// do sends a Readeck request and decodes its response into out when provided.
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	resp, err := c.request(ctx, method, path, body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if out != nil && resp.StatusCode != http.StatusNoContent {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
+// request sends an authenticated Readeck request and leaves a successful response body open.
+func (c *Client) request(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		reader = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("User-Agent", userAgent)
@@ -88,28 +107,59 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("readeck %s %s: %d %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
+		return nil, fmt.Errorf("readeck %s %s: %d %s", method, path, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
-	if out != nil && resp.StatusCode != http.StatusNoContent {
-		return json.NewDecoder(resp.Body).Decode(out)
-	}
-	return nil
+	return resp, nil
 }
 
 // CreateBookmark posts a new bookmark. Readeck does content extraction
 // asynchronously, so the returned object may have an empty title/description
-// — they'll be populated by the time the user opens it in the UI.
+// — they'll be populated by the time the user opens it in the UI. If creation
+// succeeds but read-back fails, the returned bookmark contains its ID and a
+// ReadBackWarning so callers don't report a completed write as failed.
 func (c *Client) CreateBookmark(ctx context.Context, in CreateInput) (*Bookmark, error) {
-	var bm Bookmark
-	if err := c.do(ctx, "POST", "/api/bookmarks", in, &bm); err != nil {
+	resp, err := c.request(ctx, http.MethodPost, "/api/bookmarks", in)
+	if err != nil {
 		return nil, err
 	}
-	return &bm, nil
+	defer resp.Body.Close()
+	id := strings.TrimSpace(resp.Header.Get("bookmark-id"))
+	if id == "" {
+		id = bookmarkIDFromLocation(resp.Header.Get("Location"))
+	}
+	if id == "" {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("readeck POST /api/bookmarks: %d: missing bookmark-id and usable Location headers (body: %s)", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	bm, err := c.GetBookmark(ctx, id)
+	if err != nil {
+		return &Bookmark{ID: id, ReadBackWarning: fmt.Sprintf("readeck GET /api/bookmarks/%s failed: %v", url.PathEscape(id), err)}, nil
+	}
+	if bm.ID == "" {
+		return &Bookmark{ID: id, ReadBackWarning: fmt.Sprintf("readeck GET /api/bookmarks/%s returned a bookmark without an id", url.PathEscape(id))}, nil
+	}
+	if bm.ID != id {
+		return &Bookmark{ID: id, ReadBackWarning: fmt.Sprintf("readeck GET /api/bookmarks/%s returned a different bookmark id %q", url.PathEscape(id), bm.ID)}, nil
+	}
+	return bm, nil
+}
+
+// bookmarkIDFromLocation extracts the final path component, ignoring query and fragment data.
+func bookmarkIDFromLocation(location string) string {
+	u, err := url.Parse(strings.TrimSpace(location))
+	if err != nil {
+		return ""
+	}
+	path := strings.TrimSuffix(u.Path, "/")
+	if path == "" || path == "/api/bookmarks" || path == "/bookmarks" {
+		return ""
+	}
+	return path[strings.LastIndex(path, "/")+1:]
 }
 
 // ListBookmarks fetches bookmarks matching opts.
@@ -120,6 +170,9 @@ func (c *Client) ListBookmarks(ctx context.Context, opts ListOpts) ([]Bookmark, 
 	}
 	if opts.Limit > 0 {
 		v.Set("limit", fmt.Sprintf("%d", opts.Limit))
+	}
+	if opts.Offset > 0 {
+		v.Set("offset", fmt.Sprintf("%d", opts.Offset))
 	}
 	if opts.Unread {
 		v.Set("is_archived", "false")
@@ -136,6 +189,81 @@ func (c *Client) ListBookmarks(ctx context.Context, opts ListOpts) ([]Bookmark, 
 		return nil, err
 	}
 	return out, nil
+}
+
+// FindByURL scans paginated bookmarks and returns a full-URL match.
+// Readeck's search parameter uses full-text search, which does not index URLs.
+// A nil bookmark means the URL was not found.
+func (c *Client) FindByURL(ctx context.Context, rawURL string) (*Bookmark, error) {
+	want, err := normalizeBookmarkURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	const pageSize = 100
+	seenPages := make(map[[sha256.Size]byte]struct{})
+	for offset := 0; ; {
+		items, err := c.ListBookmarks(ctx, ListOpts{Limit: pageSize, Offset: offset})
+		if err != nil {
+			return nil, err
+		}
+		if len(items) == 0 {
+			return nil, nil
+		}
+		for i := range items {
+			got, err := normalizeBookmarkURL(items[i].URL)
+			if err == nil && got == want {
+				return &items[i], nil
+			}
+		}
+		fingerprint := bookmarkPageFingerprint(items)
+		if _, seen := seenPages[fingerprint]; seen {
+			return nil, nil
+		}
+		seenPages[fingerprint] = struct{}{}
+		offset += len(items)
+	}
+}
+
+// bookmarkPageFingerprint identifies repeated URL lookup pages by their bookmark IDs and URLs.
+func bookmarkPageFingerprint(items []Bookmark) [sha256.Size]byte {
+	h := sha256.New()
+	for _, item := range items {
+		_, _ = h.Write([]byte(item.ID))
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write([]byte(item.URL))
+		_, _ = h.Write([]byte{0})
+	}
+	var fingerprint [sha256.Size]byte
+	copy(fingerprint[:], h.Sum(nil))
+	return fingerprint
+}
+
+// normalizeBookmarkURL ignores spelling differences that do not identify a
+// different HTTP resource. Paths and query strings remain exact.
+func normalizeBookmarkURL(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil || (!strings.EqualFold(u.Scheme, "http") && !strings.EqualFold(u.Scheme, "https")) || u.Hostname() == "" {
+		return "", fmt.Errorf("invalid bookmark URL %q: expected an absolute http(s) URL", raw)
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	host := strings.ToLower(u.Hostname())
+	port := u.Port()
+	if (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	if port != "" {
+		u.Host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		u.Host = "[" + host + "]"
+	} else {
+		u.Host = host
+	}
+	u.Fragment = ""
+	u.RawFragment = ""
+	if u.Path == "" {
+		u.Path = "/"
+	}
+	return u.String(), nil
 }
 
 // PermalinkOf returns the human-facing Readeck URL for a bookmark.

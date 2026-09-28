@@ -47,6 +47,7 @@ func ExtractTokenFromHTTP(ctx context.Context, r *http.Request) context.Context 
 	return context.WithValue(ctx, tokenKey{}, token)
 }
 
+// tokenFromContext returns the Readeck token stored in a request context.
 func tokenFromContext(ctx context.Context) string {
 	s, _ := ctx.Value(tokenKey{}).(string)
 	return s
@@ -107,13 +108,16 @@ func New(baseURL string) *server.MCPServer {
 			"permalink": readeck.PermalinkOf(baseURL, bm.ID),
 			"title":     bm.Title,
 		}
+		if bm.ReadBackWarning != "" {
+			out["readback_warning"] = bm.ReadBackWarning
+		}
 		b, _ := json.Marshal(out)
 		return mcpgo.NewToolResultText(string(b)), nil
 	})
 
 	// ---------- search ----------
 	s.AddTool(mcpgo.NewTool("readeck_search",
-		mcpgo.WithDescription("Full-text search across saved bookmarks."),
+		mcpgo.WithDescription("Full-text search across saved bookmarks. For an exact URL, use readeck_find_by_url."),
 		mcpgo.WithString("query", mcpgo.Required(), mcpgo.Description("Search query")),
 		mcpgo.WithNumber("limit", mcpgo.Description("Max results (default 20)")),
 	), func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -129,6 +133,25 @@ func New(baseURL string) *server.MCPServer {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		return mcpgo.NewToolResultText(formatList(baseURL, items)), nil
+	})
+
+	// ---------- exact URL lookup ----------
+	s.AddTool(mcpgo.NewTool("readeck_find_by_url",
+		mcpgo.WithDescription("Find a saved bookmark by its exact URL, including path and query string. Ignores URL fragment, host casing, and default port."),
+		mcpgo.WithString("url", mcpgo.Required(), mcpgo.Description("Full http(s) URL to find")),
+	), func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		client, errResult := withClient(ctx)
+		if errResult != nil {
+			return errResult, nil
+		}
+		bm, err := client.FindByURL(ctx, req.GetString("url", ""))
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if bm == nil {
+			return mcpgo.NewToolResultText("(no bookmark found)"), nil
+		}
+		return mcpgo.NewToolResultText(formatList(baseURL, []readeck.Bookmark{*bm})), nil
 	})
 
 	// ---------- list recent ----------
@@ -266,6 +289,7 @@ func New(baseURL string) *server.MCPServer {
 	return s
 }
 
+// formatList formats bookmark summaries with their Readeck permalinks.
 func formatList(baseURL string, items []readeck.Bookmark) string {
 	if len(items) == 0 {
 		return "(no bookmarks)"
