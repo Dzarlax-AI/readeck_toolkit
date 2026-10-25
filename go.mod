@@ -1,6 +1,8 @@
 module github.com/dzarlax/readeck_toolkit
 
-go 1.23
+go 1.27.0
+
+toolchain go1.27.3
 
 require (
 	github.com/BurntSushi/toml v1.4.0
@@ -15,5 +17,5 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	golang.org/x/net v0.25.0 // indirect
+	golang.org/x/net v0.61.0 // indirect
 )
